@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "953687903897",
+    "project_id": "mariam-8ec9d",
+    "storage_bucket": "mariam-8ec9d.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:953687903897:android:e7a8e3d6c7d7e5aad23208",
+        "android_client_info": {
+          "package_name": "com.stonx.manager"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBgaDMvhzZr96OT-6By3Zffgve4ghpY0NE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
