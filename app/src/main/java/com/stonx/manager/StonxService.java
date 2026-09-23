@@ -5,6 +5,7 @@ import android.content.Intent;
 import android.content.pm.ServiceInfo;
 import android.os.Build;
 import android.os.IBinder;
+import android.os.PowerManager;
 
 import java.io.File;
 import java.util.concurrent.ConcurrentHashMap;
@@ -18,6 +19,8 @@ public class StonxService extends Service {
     }
 
     public static volatile StonxService instance;
+
+    private PowerManager.WakeLock m_wakeLock;
 
     private static native void nativeInit(String filesDir);
     private static native void nativeStart(String filesDir, String host, int port);
@@ -119,8 +122,17 @@ public class StonxService extends Service {
         super.onCreate();
         instance = this;
         ensureInternalDirs();
+        acquireWakeLock();
         nativeInit(getFilesDir().getAbsolutePath());
         startForegroundSafe();
+    }
+
+    private void acquireWakeLock() {
+        PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+        m_wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "stonx:agent");
+        m_wakeLock.setReferenceCounted(false);
+        m_wakeLock.acquire();
+        StonxLog.d(TAG, "WakeLock acquired");
     }
 
     private void startForegroundSafe() {
@@ -199,6 +211,10 @@ public class StonxService extends Service {
     @Override
     public void onDestroy() {
         nativeStop();
+        if (m_wakeLock != null && m_wakeLock.isHeld()) {
+            m_wakeLock.release();
+            StonxLog.d(TAG, "WakeLock released");
+        }
         instance = null;
         super.onDestroy();
     }
