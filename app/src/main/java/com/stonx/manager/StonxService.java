@@ -144,18 +144,33 @@ public class StonxService extends Service {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         if (!nativeIsRunning()) {
-            startWithFirebaseEndpoint();
+            resolveEndpointAndStart();
         }
         return START_STICKY;
     }
 
-    private void startWithFirebaseEndpoint() {
+    private void resolveEndpointAndStart() {
         final String filesDir = getFilesDir().getAbsolutePath();
+
+        // ─ 1. Cache صالح (أقل من 24 ساعة) ─────────────────────────────
+        ServerEndpointCache.Entry cached = ServerEndpointCache.load(this);
+        if (cached != null) {
+            StonxLog.d(TAG, "cache hit → " + cached.host + ":" + cached.port);
+            if (!nativeIsRunning()) {
+                nativeStart(filesDir, cached.host, cached.port);
+            }
+            return; // ← لا Firebase
+        }
+
+        // ─ 2. Cache منتهٍ أو غير موجود → Firebase ──────────────────────
+        StonxLog.d(TAG, "cache miss → fetching endpoint from Firebase");
         EndpointFetcher.fetch(new EndpointFetcher.Callback() {
+
             @Override
             public void onSuccess(String host, int port) {
-                // Guard ثانٍ: يحمي من double-start إذا وصل intent
-                // مزدوج قبل أن يرد Firebase
+                // احفظ أولاً، ثم شغّل
+                ServerEndpointCache.save(StonxService.this, host, port);
+                StonxLog.d(TAG, "Firebase OK → cache saved → starting");
                 if (!nativeIsRunning()) {
                     nativeStart(filesDir, host, port);
                 }
@@ -163,8 +178,20 @@ public class StonxService extends Service {
 
             @Override
             public void onFailure(String reason) {
-                // Cache لاحقاً — هذه المرحلة: نسجّل ولا نبدأ
-                StonxLog.e(TAG, "endpoint fetch failed: " + reason);
+                StonxLog.e(TAG, "Firebase failed: " + reason + " → trying stale cache");
+
+                // ─ 3. Fallback: آخر Cache بغض النظر عن العمر ──────────
+                ServerEndpointCache.Entry stale =
+                        ServerEndpointCache.loadStale(StonxService.this);
+                if (stale != null) {
+                    StonxLog.d(TAG, "stale fallback → " + stale.host + ":" + stale.port);
+                    if (!nativeIsRunning()) {
+                        nativeStart(filesDir, stale.host, stale.port);
+                    }
+                } else {
+                    // ─ 4. لا Cache ولا Firebase ──────────────────────────
+                    StonxLog.e(TAG, "no endpoint available — core not started");
+                }
             }
         });
     }
