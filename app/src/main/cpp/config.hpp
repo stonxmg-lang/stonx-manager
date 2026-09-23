@@ -15,7 +15,7 @@ namespace Config {
 
     // ── إعادة الاتصال (exponential backoff) ──────────────────────────────
     constexpr int RECONNECT_MIN_DELAY_SEC  = 2;
-    constexpr int RECONNECT_MAX_DELAY_SEC  = 300;
+    constexpr int RECONNECT_MAX_DELAY_SEC  = 30;   // كان 300 (5 دقائق) → 30 ثانية
     constexpr int HEARTBEAT_INTERVAL_SEC   = 30;
     constexpr int CONNECTION_TIMEOUT_SEC   = 15;
     constexpr int AUTH_TIMEOUT_SEC         = 30;
