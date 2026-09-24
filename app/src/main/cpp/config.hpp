@@ -9,8 +9,8 @@
 namespace Config {
 
     // ── الاتصال ────────────────────────────────────────────────────────────
-    constexpr const char*  RECEIVER_HOST           = "89.147.157.190";
-    constexpr uint16_t     RECEIVER_PORT           = 4444;
+    // RECEIVER_HOST و RECEIVER_PORT حُذفا — الـEndpoint يأتي من Firebase
+    // عبر ServerEndpointCache ويُمرَّر إلى StonxCore عبر JNI
     constexpr const char*  PSK                     = "STONX_SECRET_2026";
 
     // ── إعادة الاتصال (exponential backoff) ──────────────────────────────
