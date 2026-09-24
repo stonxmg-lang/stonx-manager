@@ -344,8 +344,19 @@ void StonxCore::cmd_sync(int fd, const std::string& op_id, const std::string& js
             std::string rel = (comma != std::string::npos) ? flist.substr(0, comma) : flist;
             if (!rel.empty()) {
                 std::string file_path = real + "/" + rel;
-                // tid مشتق من المسار — يضمن Resume بعد انقطاع الاتصال
                 std::string tid = "S-" + SHA256::hex(file_path).substr(0, 16);
+
+                // تحقق من إمكانية فتح الملف قبل البدء
+                FILE* test = fopen(file_path.c_str(), "rb");
+                if (!test) {
+                    LOGI("sync: skip unreadable: %s", rel.c_str());
+                    write_frame(fd, build_transfer_skip(tid, rel));
+                    if (comma == std::string::npos) break;
+                    flist = flist.substr(comma+1);
+                    continue;
+                }
+                fclose(test);
+
                 std::atomic<bool> cancel{false};
                 auto r = transfer_send(fd, tid, file_path, rel, prog, cancel, nullptr);
                 if (r != TransferResult::OK) all_ok = false;

@@ -112,6 +112,10 @@ std::string build_chunk_header(const std::string& transfer_id,
                                 int compressed_size,
                                 uint32_t crc32);
 
+// build_transfer_skip — يُرسَل لو الملف غير قابل للفتح
+std::string build_transfer_skip(const std::string& transfer_id,
+                                 const std::string& rel_path);
+
 std::string build_transfer_complete(const std::string& transfer_id,
                                      const std::string& sha256);
 

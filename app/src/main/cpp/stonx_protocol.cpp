@@ -244,7 +244,15 @@ std::string build_chunk_msg(const std::string& transfer_id,
            "}}";
 }
 
-// build_chunk_header — بدون data field، مع dataFollows:true
+// build_transfer_skip — يُرسَل بدل TRANSFER_INIT لو الملف غير قابل للفتح
+std::string build_transfer_skip(const std::string& transfer_id,
+                                 const std::string& rel_path) {
+    return "{\"type\":\"TRANSFER_SKIP\","
+           "\"payload\":{"
+               "\"transferId\":" + json_str(transfer_id) + ","
+               "\"path\":"       + json_str(rel_path) +
+           "}}";
+}
 // يُستخدم مع write_raw_frame لإرسال البيانات بدون Base64
 std::string build_chunk_header(const std::string& transfer_id,
                                 int chunk_index,
