@@ -349,7 +349,7 @@ TransferResult transfer_recv(int fd,
 
         // قراءة binary data مباشرة — بدون Base64
         if (read_raw_frame(fd, raw_buf, 30) != IOResult::OK) {
-            std::string nack = build_chunk_nack(transfer_id, ci, "read_error");
+            std::string nack = build_chunk_nack(tid, ci, "read_error");
             write_frame(fd, nack);
             continue;
         }
