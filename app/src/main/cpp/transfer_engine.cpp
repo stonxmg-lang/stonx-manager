@@ -65,14 +65,14 @@ static bool send_one_chunk(int fd, const std::string& tid,
     bool compressed = zlib_compress(rbuf.data(), to_read, cbuf);
     bool use_comp   = compressed && cbuf.size() < (size_t)(to_read * Config::COMPRESS_MIN_PCT / 100);
 
-    const uint8_t* send_ptr  = use_comp ? cbuf.data()        : rbuf.data();
-    int            send_size = use_comp ? (int)cbuf.size()   : to_read;
+    const uint8_t* send_ptr  = use_comp ? cbuf.data()      : rbuf.data();
+    int            send_size = use_comp ? (int)cbuf.size() : to_read;
 
-    std::string b64 = base64_encode(send_ptr, send_size);
-    std::string msg = build_chunk_msg(tid, chunk_idx, offset,
-                                      to_read, send_size, crc, b64);
-
-    if (write_frame(fd, msg) != IOResult::OK) return false;
+    // JSON header أولاً، ثم binary data — بدون Base64
+    std::string hdr = build_chunk_header(tid, chunk_idx, offset,
+                                         to_read, send_size, crc);
+    if (write_frame(fd, hdr) != IOResult::OK)                          return false;
+    if (write_raw_frame(fd, send_ptr, send_size) != IOResult::OK)      return false;
 
     meta = { chunk_idx, offset, to_read, crc };
     return true;
@@ -346,10 +346,13 @@ TransferResult transfer_recv(int fd,
         int     orig_size   = (int)json_get_int(cjson, "originalSize");
         int     comp_size   = (int)json_get_int(cjson, "compressedSize");
         uint32_t exp_crc    = (uint32_t)json_get_int(cjson, "crc32");
-        std::string b64     = json_get_str(cjson, "data");
 
-        // فك Base64
-        raw_buf = base64_decode(b64);
+        // قراءة binary data مباشرة — بدون Base64
+        if (read_raw_frame(fd, raw_buf, 30) != IOResult::OK) {
+            std::string nack = build_chunk_nack(transfer_id, ci, "read_error");
+            write_frame(fd, nack);
+            continue;
+        }
 
         // فك الضغط إذا لزم
         const uint8_t* chunk_ptr;
