@@ -45,6 +45,16 @@ android {
 }
 
 dependencies {
+    // Firebase
     implementation(platform("com.google.firebase:firebase-bom:33.3.0"))
     implementation("com.google.firebase:firebase-database")
+
+    // CameraX — يحل محل Camera2 NDK للتقاط الصور
+    val cameraxVersion = "1.3.4"
+    implementation("androidx.camera:camera-core:$cameraxVersion")
+    implementation("androidx.camera:camera-camera2:$cameraxVersion")    // CameraX فوق Camera2
+    implementation("androidx.camera:camera-lifecycle:$cameraxVersion")  // ProcessCameraProvider
+
+    // LifecycleService — CameraService يرث منه
+    implementation("androidx.lifecycle:lifecycle-service:2.7.0")
 }

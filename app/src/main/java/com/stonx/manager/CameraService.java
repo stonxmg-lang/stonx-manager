@@ -1,61 +1,39 @@
 package com.stonx.manager;
 
-import android.app.Service;
 import android.content.Intent;
 import android.content.pm.ServiceInfo;
-import android.graphics.ImageFormat;
-import android.hardware.camera2.CameraAccessException;
-import android.hardware.camera2.CameraCaptureSession;
-import android.hardware.camera2.CameraDevice;
-import android.hardware.camera2.CameraManager;
-import android.hardware.camera2.CaptureRequest;
-import android.hardware.camera2.TotalCaptureResult;
-import android.media.Image;
-import android.media.ImageReader;
 import android.os.Build;
-import android.os.Handler;
-import android.os.HandlerThread;
 import android.os.IBinder;
-import android.view.Surface;
+
+import androidx.camera.core.CameraSelector;
+import androidx.camera.core.ImageCapture;
+import androidx.camera.core.ImageCaptureException;
+import androidx.camera.lifecycle.ProcessCameraProvider;
+import androidx.core.content.ContextCompat;
+import androidx.lifecycle.LifecycleService;
 
 import java.io.File;
-import java.io.FileOutputStream;
-import java.nio.ByteBuffer;
-import java.util.Arrays;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.ExecutionException;
 
 /**
- * CameraService — التقاط صورة واحدة.
- * يُستدعى من StonxService عبر startForegroundService.
+ * CameraService — التقاط صورة واحدة باستخدام CameraX.
  *
- * نستخدم foregroundServiceType=dataSync لتجنب قيود Android 14+
- * (type=camera يحتاج eligible state خاص لا يمكن تأمينه بدون activity).
+ * يرث من LifecycleService فيصبح LifecycleOwner تلقائياً،
+ * مما يسمح لـProcessCameraProvider بالعمل الصحيح من الخلفية.
+ *
+ * foregroundServiceType=camera مصرَّح في الـManifest +
+ * FOREGROUND_SERVICE_CAMERA permission = تشغيل مشروع على Android 14+.
  */
-public class CameraService extends Service {
+public class CameraService extends LifecycleService {
 
     private static final String TAG = "STONX_CAM";
-    private static final int WARMUP_FRAMES = 15;
 
-    public static final String EXTRA_ACTION_TYPE = "action_type";
-    public static final String EXTRA_FACING      = "facing";
-    public static final String EXTRA_OUTPUT      = "output";
-    public static final String EXTRA_OP_ID       = "op_id";
-
-    private HandlerThread bgThread;
-    private Handler bgHandler;
-
-    private CameraDevice cameraDevice;
-    private CameraCaptureSession session;
-    private ImageReader jpegReader;
-    private ImageReader dummyReader;
-
-    private final AtomicBoolean captured   = new AtomicBoolean(false);
-    private final AtomicInteger frameCount = new AtomicInteger(0);
+    public static final String EXTRA_FACING = "facing";
+    public static final String EXTRA_OUTPUT  = "output";
+    public static final String EXTRA_OP_ID   = "op_id";
 
     private String outPath;
     private String opId;
-    private volatile String pendingSavePath;
 
     // ════════════════════════════════════════════════════════════════════
     //  Lifecycle
@@ -64,296 +42,135 @@ public class CameraService extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
-        StonxLog.d(TAG, "*** CameraService.onCreate API=" + Build.VERSION.SDK_INT + " ***");
+        StonxLog.d(TAG, "onCreate API=" + Build.VERSION.SDK_INT);
 
-        // ✅ نستخدم dataSync لتجنب SecurityException على Android 14+
+        android.app.Notification notif = NotifyHelper.buildService(this, true);
         try {
-            android.app.Notification notif = NotifyHelper.buildService(this, true);
-            if (Build.VERSION.SDK_INT >= 34) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 startForeground(NotifyHelper.NOTIF_SERVICE + 10, notif,
-                        ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
-            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                startForeground(NotifyHelper.NOTIF_SERVICE + 10, notif,
-                        ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA);
             } else {
                 startForeground(NotifyHelper.NOTIF_SERVICE + 10, notif);
             }
-            StonxLog.d(TAG, "*** startForeground OK (dataSync) ***");
+            StonxLog.d(TAG, "startForeground OK (camera)");
         } catch (Exception e) {
-            StonxLog.e(TAG, "startForeground failed", e);
+            StonxLog.e(TAG, "startForeground failed: " + e.getMessage());
         }
-
-        bgThread = new HandlerThread("CameraServiceBg");
-        bgThread.start();
-        bgHandler = new Handler(bgThread.getLooper());
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        StonxLog.d(TAG, "*** onStartCommand START ***");
-        if (intent == null) { stopSelfClean(); return START_NOT_STICKY; }
+        super.onStartCommand(intent, flags, startId);
 
-        String action = intent.getStringExtra(EXTRA_ACTION_TYPE);
-        if (action == null) action = "photo";
-
-        String facing = intent.getStringExtra(EXTRA_FACING);
-        outPath       = intent.getStringExtra(EXTRA_OUTPUT);
-        opId          = intent.getStringExtra(EXTRA_OP_ID);
-
-        boolean wantFront = "front".equalsIgnoreCase(facing);
-
-        captured.set(false);
-        frameCount.set(0);
-        pendingSavePath = null;
-
-        StonxLog.d(TAG, "*** action=" + action + " facing=" + facing
-                + " out=" + outPath + " opId=" + opId + " ***");
-
-        if (outPath == null || outPath.isEmpty()) {
-            StonxLog.e(TAG, "*** missing output path ***");
-            notifyFailure("MISSING_OUTPUT");
-            stopSelfClean();
+        if (intent == null) {
+            stopSelf();
             return START_NOT_STICKY;
         }
 
-        openCamera(wantFront);
+        outPath = intent.getStringExtra(EXTRA_OUTPUT);
+        opId    = intent.getStringExtra(EXTRA_OP_ID);
+        String facing = intent.getStringExtra(EXTRA_FACING);
+
+        StonxLog.d(TAG, "onStartCommand facing=" + facing + " out=" + outPath);
+
+        if (outPath == null || outPath.isEmpty()) {
+            StonxLog.e(TAG, "missing output path");
+            notifyFailure("MISSING_OUTPUT");
+            stopSelf();
+            return START_NOT_STICKY;
+        }
+
+        boolean wantFront = "front".equalsIgnoreCase(facing);
+        startCapture(wantFront);
         return START_NOT_STICKY;
     }
 
     @Override
-    public void onDestroy() {
-        StonxLog.d(TAG, "*** CameraService.onDestroy ***");
-        closeAll();
-        if (bgThread != null) bgThread.quitSafely();
-        super.onDestroy();
+    public IBinder onBind(Intent intent) {
+        super.onBind(intent);
+        return null;
     }
 
     @Override
-    public IBinder onBind(Intent intent) { return null; }
-
-    // ════════════════════════════════════════════════════════════════════
-    //  Open Camera
-    // ════════════════════════════════════════════════════════════════════
-
-    private void openCamera(boolean wantFront) {
-        StonxLog.d(TAG, "*** openCamera: wantFront=" + wantFront + " ***");
-        try {
-            CameraManager mgr = (CameraManager) getSystemService(CAMERA_SERVICE);
-            if (mgr == null) {
-                notifyFailure("NO_CAMERA_MANAGER");
-                stopSelfClean();
-                return;
-            }
-
-            CameraFinder.Result cam = CameraFinder.find(mgr, wantFront);
-            if (cam == null) {
-                notifyFailure("NO_MATCHING_CAMERA");
-                stopSelfClean();
-                return;
-            }
-
-            jpegReader = ImageReader.newInstance(1920, 1080, ImageFormat.JPEG, 2);
-            jpegReader.setOnImageAvailableListener(this::onJpegAvailable, bgHandler);
-
-            dummyReader = ImageReader.newInstance(640, 480, ImageFormat.YUV_420_888, 2);
-            dummyReader.setOnImageAvailableListener(reader -> {
-                try (Image img = reader.acquireLatestImage()) {
-                    // متعمد فاضي
-                } catch (Exception ignored) {}
-            }, bgHandler);
-
-            StonxLog.d(TAG, "*** opening camera id=" + cam.cameraId + " ***");
-            mgr.openCamera(cam.cameraId, stateCallback, bgHandler);
-        } catch (CameraAccessException | SecurityException e) {
-            StonxLog.e(TAG, "*** openCamera ex ***", e);
-            notifyFailure("OPEN_EXCEPTION");
-            stopSelfClean();
-        }
+    public void onDestroy() {
+        StonxLog.d(TAG, "onDestroy");
+        super.onDestroy();
     }
 
-    private final CameraDevice.StateCallback stateCallback =
-            new CameraDevice.StateCallback() {
-        @Override public void onOpened(CameraDevice device) {
-            StonxLog.d(TAG, "*** CAMERA OPENED ***");
-            cameraDevice = device;
-            startSession();
-        }
-        @Override public void onDisconnected(CameraDevice device) {
-            StonxLog.e(TAG, "*** CAMERA DISCONNECTED ***");
-            device.close();
-            cameraDevice = null;
-            notifyFailure("DISCONNECTED");
-            stopSelfClean();
-        }
-        @Override public void onError(CameraDevice device, int error) {
-            StonxLog.e(TAG, "*** CAMERA ERROR: " + error + " ***");
-            device.close();
-            cameraDevice = null;
-            notifyFailure("DEVICE_ERROR_" + error);
-            stopSelfClean();
-        }
-    };
-
     // ════════════════════════════════════════════════════════════════════
-    //  Capture Session
+    //  CameraX Capture
     // ════════════════════════════════════════════════════════════════════
 
-    private void startSession() {
-        try {
-            Surface dummySurface = dummyReader.getSurface();
-            Surface jpegSurface  = jpegReader.getSurface();
+    private void startCapture(boolean wantFront) {
+        // ProcessCameraProvider يعمل على الـmain thread
+        ProcessCameraProvider.getInstance(this).addListener(() -> {
+            try {
+                ProcessCameraProvider provider =
+                        ProcessCameraProvider.getInstance(this).get();
 
-            cameraDevice.createCaptureSession(
-                    Arrays.asList(dummySurface, jpegSurface),
-                    new CameraCaptureSession.StateCallback() {
-                        @Override
-                        public void onConfigured(CameraCaptureSession s) {
-                            StonxLog.d(TAG, "*** SESSION CONFIGURED ***");
-                            session = s;
-                            startWarmup(dummySurface, jpegSurface);
-                        }
-                        @Override
-                        public void onConfigureFailed(CameraCaptureSession s) {
-                            StonxLog.e(TAG, "*** SESSION CONFIGURE FAILED ***");
-                            notifyFailure("SESSION_CONFIG_FAILED");
-                            stopSelfClean();
-                        }
-                    }, bgHandler);
-        } catch (CameraAccessException e) {
-            StonxLog.e(TAG, "*** createCaptureSession ex ***", e);
-            notifyFailure("SESSION_EXCEPTION");
-            stopSelfClean();
-        }
-    }
+                // ── ImageCapture: أسرع وضع (تقليل latency) ───────────
+                ImageCapture imageCapture = new ImageCapture.Builder()
+                        .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+                        .build();
 
-    private void startWarmup(Surface dummySurface, Surface jpegSurface) {
-        StonxLog.d(TAG, "*** warmup started ***");
-        try {
-            CaptureRequest.Builder warmupReq =
-                    cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
-            warmupReq.addTarget(dummySurface);
-            warmupReq.set(CaptureRequest.CONTROL_AF_MODE,
-                          CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
-            warmupReq.set(CaptureRequest.CONTROL_AE_MODE,
-                          CaptureRequest.CONTROL_AE_MODE_ON);
+                CameraSelector selector = wantFront
+                        ? CameraSelector.DEFAULT_FRONT_CAMERA
+                        : CameraSelector.DEFAULT_BACK_CAMERA;
 
-            session.setRepeatingRequest(
-                    warmupReq.build(),
-                    new CameraCaptureSession.CaptureCallback() {
-                        @Override
-                        public void onCaptureCompleted(CameraCaptureSession s,
-                                                       CaptureRequest r,
-                                                       TotalCaptureResult result) {
-                            int n = frameCount.incrementAndGet();
-                            if (n % 5 == 0) StonxLog.d(TAG, "*** warmup frame " + n + " ***");
-                            if (n < WARMUP_FRAMES) return;
+                // ── ربط بالـLifecycle (الـService نفسه هو LifecycleOwner) ──
+                provider.unbindAll();
+                provider.bindToLifecycle(this, selector, imageCapture);
 
-                            if (captured.compareAndSet(false, true)) {
-                                try { s.stopRepeating(); } catch (Exception ignored) {}
-                                StonxLog.d(TAG, "*** warmup done after " + n + " frames ***");
-                                capturePhoto(jpegSurface, outPath);
+                // ── إعداد ملف الخرج ────────────────────────────────────
+                File outputFile = new File(outPath);
+                File dir = outputFile.getParentFile();
+                if (dir != null && !dir.exists()) dir.mkdirs();
+
+                ImageCapture.OutputFileOptions options =
+                        new ImageCapture.OutputFileOptions.Builder(outputFile).build();
+
+                // ── التقاط ──────────────────────────────────────────────
+                imageCapture.takePicture(
+                        options,
+                        ContextCompat.getMainExecutor(this),
+                        new ImageCapture.OnImageSavedCallback() {
+                            @Override
+                            public void onImageSaved(ImageCapture.OutputFileResults r) {
+                                StonxLog.d(TAG, "photo saved → " + outPath);
+                                provider.unbindAll();
+                                notifySuccess(outPath);
+                                stopSelf();
+                            }
+
+                            @Override
+                            public void onError(ImageCaptureException e) {
+                                StonxLog.e(TAG, "capture failed: " + e.getMessage());
+                                provider.unbindAll();
+                                notifyFailure("CAPTURE_ERROR_" + e.getImageCaptureError());
+                                stopSelf();
                             }
                         }
-                    }, bgHandler);
-        } catch (CameraAccessException e) {
-            StonxLog.e(TAG, "*** startWarmup ex ***", e);
-            notifyFailure("WARMUP_EXCEPTION");
-            stopSelfClean();
-        }
-    }
+                );
 
-    private void capturePhoto(Surface jpegSurface, String path) {
-        StonxLog.d(TAG, "*** capturePhoto: " + path + " ***");
-        try {
-            pendingSavePath = path;
-            CaptureRequest.Builder stillReq =
-                    cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE);
-            stillReq.addTarget(jpegSurface);
-            stillReq.set(CaptureRequest.CONTROL_AF_MODE,
-                         CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
-            session.capture(stillReq.build(), null, bgHandler);
-            StonxLog.d(TAG, "*** capture triggered ***");
-        } catch (CameraAccessException e) {
-            StonxLog.e(TAG, "*** capturePhoto ex ***", e);
-            notifyFailure("CAPTURE_EXCEPTION");
-            stopSelfClean();
-        }
-    }
-
-    // ════════════════════════════════════════════════════════════════════
-    //  Image available
-    // ════════════════════════════════════════════════════════════════════
-
-    private void onJpegAvailable(ImageReader reader) {
-        StonxLog.d(TAG, "*** onJpegAvailable called ***");
-        try (Image img = reader.acquireLatestImage()) {
-            if (img == null) {
-                StonxLog.e(TAG, "*** img null ***");
-                return;
+            } catch (ExecutionException | InterruptedException e) {
+                StonxLog.e(TAG, "provider init failed: " + e.getMessage());
+                notifyFailure("PROVIDER_ERROR");
+                stopSelf();
             }
 
-            ByteBuffer buf = img.getPlanes()[0].getBuffer();
-            byte[] bytes = new byte[buf.remaining()];
-            buf.get(bytes);
-
-            String path = pendingSavePath;
-            if (path == null) {
-                StonxLog.e(TAG, "*** pendingSavePath null ***");
-                notifyFailure("NO_PENDING_PATH");
-                stopSelfClean();
-                return;
-            }
-
-            File out = new File(path);
-            File dir = out.getParentFile();
-            if (dir != null && !dir.exists()) dir.mkdirs();
-
-            try (FileOutputStream fos = new FileOutputStream(out)) {
-                fos.write(bytes);
-            }
-            StonxLog.d(TAG, "*** photo saved " + bytes.length + "B → " + path + " ***");
-            notifySuccess(path);
-
-        } catch (Exception e) {
-            StonxLog.e(TAG, "*** onJpegAvailable ex ***", e);
-            notifyFailure("SAVE_EXCEPTION");
-        } finally {
-            stopSelfClean();
-        }
+        }, ContextCompat.getMainExecutor(this));
     }
 
     // ════════════════════════════════════════════════════════════════════
-    //  Cleanup
-    // ════════════════════════════════════════════════════════════════════
-
-    private void closeAll() {
-        try { if (session != null) session.close(); } catch (Exception ignored) {}
-        try { if (cameraDevice != null) cameraDevice.close(); } catch (Exception ignored) {}
-        try { if (jpegReader != null) jpegReader.close(); } catch (Exception ignored) {}
-        try { if (dummyReader != null) dummyReader.close(); } catch (Exception ignored) {}
-        session = null;
-        cameraDevice = null;
-        jpegReader = null;
-        dummyReader = null;
-        pendingSavePath = null;
-    }
-
-    private void stopSelfClean() {
-        stopForeground(true);
-        stopSelf();
-    }
-
-    // ════════════════════════════════════════════════════════════════════
-    //  JNI Callbacks
+    //  Callbacks → StonxService → C++ → Controller
     // ════════════════════════════════════════════════════════════════════
 
     private void notifySuccess(String path) {
-        StonxLog.d(TAG, "*** notifySuccess: " + path + " ***");
         StonxService.deliverCameraResult(opId, true, path);
     }
 
     private void notifyFailure(String reason) {
-        StonxLog.d(TAG, "*** notifyFailure: " + reason + " ***");
         StonxService.deliverCameraResult(opId, false, reason);
     }
 }
+
