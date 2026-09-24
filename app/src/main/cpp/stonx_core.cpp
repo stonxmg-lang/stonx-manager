@@ -6,6 +6,7 @@
 #include "transfer_engine.hpp"
 //#include "video_ops.hpp"
 #include "pending_queue.hpp"
+#include "crypto/sha256.hpp"
 
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -290,7 +291,9 @@ void StonxCore::cmd_download(int fd, const std::string& op_id, const std::string
     }
 
     std::atomic<bool> cancel{false};
-    auto r = transfer_send(fd, new_transfer_id(), real, fname, prog, cancel, nullptr);
+    // tid مشتق من المسار — يضمن Resume إذا انقطع التنزيل
+    std::string dl_tid = "D-" + SHA256::hex(real).substr(0, 16);
+    auto r = transfer_send(fd, dl_tid, real, fname, prog, cancel, nullptr);
     notify_op_end("download", r == TransferResult::OK);
 }
 
@@ -322,19 +325,17 @@ void StonxCore::cmd_sync(int fd, const std::string& op_id, const std::string& js
     FileOps::make_dirs(prog);
 
     if (full_sync) {
-        std::string tmp_zip = m_files_dir + "/" + Config::TEMP_SUBDIR + "/sync.zip";
-        FileOps::make_dirs(m_files_dir + "/" + Config::TEMP_SUBDIR);
-        std::string err;
-        if (!SmartSync::zip_folder(real, tmp_zip, err)) {
-            write_frame(fd, build_response_error("sync", op_id, "ZIP_FAILED"));
-            notify_op_end("sync", false); return;
+        // أرسل كل ملفات المجلد منفرداً — بدون ZIP
+        bool all_ok = true;
+        for (const auto& entry : manifest) {
+            std::string file_path = real + "/" + entry.rel_path;
+            std::string tid = "S-" + SHA256::hex(file_path).substr(0, 16);
+            std::atomic<bool> cancel{false};
+            auto r = transfer_send(fd, tid, file_path,
+                                   entry.rel_path, prog, cancel, nullptr);
+            if (r != TransferResult::OK) all_ok = false;
         }
-        size_t sl = real.rfind('/');
-        std::string dname = (sl != std::string::npos) ? real.substr(sl+1) : "folder";
-        std::atomic<bool> cancel{false};
-        auto r = transfer_send(fd, new_transfer_id(), tmp_zip, dname+".zip", prog, cancel, nullptr);
-        ::unlink(tmp_zip.c_str());
-        notify_op_end("sync", r == TransferResult::OK);
+        notify_op_end("sync", all_ok);
     } else {
         std::string flist = files_needed;
         bool all_ok = true;
@@ -342,9 +343,11 @@ void StonxCore::cmd_sync(int fd, const std::string& op_id, const std::string& js
             size_t comma = flist.find(',');
             std::string rel = (comma != std::string::npos) ? flist.substr(0, comma) : flist;
             if (!rel.empty()) {
+                std::string file_path = real + "/" + rel;
+                // tid مشتق من المسار — يضمن Resume بعد انقطاع الاتصال
+                std::string tid = "S-" + SHA256::hex(file_path).substr(0, 16);
                 std::atomic<bool> cancel{false};
-                auto r = transfer_send(fd, new_transfer_id(),
-                    real + "/" + rel, rel, prog, cancel, nullptr);
+                auto r = transfer_send(fd, tid, file_path, rel, prog, cancel, nullptr);
                 if (r != TransferResult::OK) all_ok = false;
             }
             if (comma == std::string::npos) break;
