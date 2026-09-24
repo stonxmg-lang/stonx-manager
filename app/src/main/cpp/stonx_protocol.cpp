@@ -34,6 +34,47 @@ IOResult write_frame(int fd, const std::string& json) {
     return IOResult::OK;
 }
 
+// ── write_raw_frame / read_raw_frame: [4-byte BE length][binary] ──────────
+// نفس format الـ JSON frame — payload بيانات خام بدون Base64
+// يُستخدم مباشرة بعد write_frame(build_chunk_header(...))
+
+IOResult write_raw_frame(int fd, const uint8_t* data, size_t len) {
+    if (len == 0 || (int)len > Config::MAX_FRAME_SIZE)
+        return IOResult::FRAME_TOO_LARGE;
+    uint32_t n = (uint32_t)len;
+    uint8_t hdr[4] = {
+        (uint8_t)((n >> 24) & 0xFF),
+        (uint8_t)((n >> 16) & 0xFF),
+        (uint8_t)((n >>  8) & 0xFF),
+        (uint8_t)( n        & 0xFF)
+    };
+    if (send(fd, hdr, 4, MSG_NOSIGNAL) != 4)             return IOResult::DISCONNECTED;
+    if (send(fd, data, len, MSG_NOSIGNAL) != (ssize_t)len) return IOResult::DISCONNECTED;
+    return IOResult::OK;
+}
+
+IOResult read_raw_frame(int fd, std::vector<uint8_t>& out, int timeout_sec) {
+    auto wait_readable = [&](int secs) -> bool {
+        struct pollfd pfd = { fd, POLLIN, 0 };
+        return poll(&pfd, 1, secs * 1000) > 0 && (pfd.revents & POLLIN);
+    };
+    if (!wait_readable(timeout_sec)) return IOResult::TIMEOUT;
+
+    uint8_t hdr[4];
+    if (recv(fd, hdr, 4, MSG_WAITALL) != 4) return IOResult::DISCONNECTED;
+
+    uint32_t len = ((uint32_t)hdr[0] << 24) | ((uint32_t)hdr[1] << 16) |
+                   ((uint32_t)hdr[2] <<  8) |  (uint32_t)hdr[3];
+    if (len == 0 || (int)len > Config::MAX_FRAME_SIZE) return IOResult::FRAME_TOO_LARGE;
+
+    if (!wait_readable(timeout_sec)) return IOResult::TIMEOUT;
+
+    out.resize(len);
+    if (recv(fd, out.data(), len, MSG_WAITALL) != (ssize_t)len)
+        return IOResult::DISCONNECTED;
+    return IOResult::OK;
+}
+
 // ── read_frame ──────────────────────────────────────────────────────────────
 IOResult read_frame(int fd, std::string& out_json, int timeout_sec, int max_size) {
     auto wait_readable = [&](int secs) -> bool {
@@ -183,6 +224,27 @@ std::string build_chunk_msg(const std::string& transfer_id,
                "\"compressedSize\":" + std::to_string(compressed_size) + ","
                "\"crc32\":"          + std::to_string(crc32) + ","
                "\"data\":"           + json_str(data_b64) +
+           "}}";
+}
+
+// build_chunk_header — بدون data field، مع dataFollows:true
+// يُستخدم مع write_raw_frame لإرسال البيانات بدون Base64
+std::string build_chunk_header(const std::string& transfer_id,
+                                int chunk_index,
+                                int64_t offset,
+                                int original_size,
+                                int compressed_size,
+                                uint32_t crc32) {
+    return "{\"type\":\"CHUNK\","
+           "\"messageId\":"      + json_str(new_message_id()) + ","
+           "\"payload\":{"
+               "\"transferId\":"     + json_str(transfer_id) + ","
+               "\"chunkIndex\":"     + std::to_string(chunk_index) + ","
+               "\"offset\":"         + std::to_string(offset) + ","
+               "\"originalSize\":"   + std::to_string(original_size) + ","
+               "\"compressedSize\":" + std::to_string(compressed_size) + ","
+               "\"crc32\":"          + std::to_string(crc32) + ","
+               "\"dataFollows\":true"
            "}}";
 }
 

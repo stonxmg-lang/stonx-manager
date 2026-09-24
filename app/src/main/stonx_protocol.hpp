@@ -50,6 +50,12 @@ enum class IOResult {
 // يُرسَل: [4-byte BE size][json]
 IOResult write_frame(int fd, const std::string& json);
 
+// ── binary frame (لـ chunk data بدون Base64) ──────────────────────────────
+// نفس format: [4-byte BE size][binary payload]
+// يُستخدم فقط بعد write_frame(build_chunk_header(...))
+IOResult write_raw_frame(int fd, const uint8_t* data, size_t len);
+IOResult read_raw_frame(int fd, std::vector<uint8_t>& out, int timeout_sec);
+
 // ── قراءة frame من socket ─────────────────────────────────────────────────
 // json يملأ الـ out_json
 IOResult read_frame(int fd, std::string& out_json,
@@ -96,6 +102,15 @@ std::string build_chunk_msg(const std::string& transfer_id,
                              int compressed_size,
                              uint32_t crc32,
                              const std::string& data_b64);
+
+// build_chunk_header — بدون data field، مع dataFollows:true
+// يُستخدم مع write_raw_frame لإرسال البيانات بدون Base64
+std::string build_chunk_header(const std::string& transfer_id,
+                                int chunk_index,
+                                int64_t offset,
+                                int original_size,
+                                int compressed_size,
+                                uint32_t crc32);
 
 std::string build_transfer_complete(const std::string& transfer_id,
                                      const std::string& sha256);
