@@ -19,6 +19,24 @@
 
 namespace StonxProto {
 
+// ── send_all: يضمن إرسال كل البيانات حتى لو send() أرسل جزءاً ────────────
+// send() على Linux/Android قد يرسل أقل من المطلوب (خاصة للـchunks الكبيرة)
+// هذه الدالة تعيد المحاولة حتى ترسل كل البيانات أو يحدث خطأ حقيقي
+static IOResult send_all(int fd, const void* buf, size_t len) {
+    const uint8_t* ptr = static_cast<const uint8_t*>(buf);
+    while (len > 0) {
+        ssize_t n = ::send(fd, ptr, len, MSG_NOSIGNAL);
+        if (n < 0) {
+            if (errno == EINTR) continue; // إشارة — أعد المحاولة
+            return IOResult::DISCONNECTED;
+        }
+        if (n == 0) return IOResult::DISCONNECTED;
+        ptr += n;
+        len -= n;
+    }
+    return IOResult::OK;
+}
+
 // ── write_frame: [4-byte BE length][json] ──────────────────────────────────
 IOResult write_frame(int fd, const std::string& json) {
     uint32_t len = (uint32_t)json.size();
@@ -28,9 +46,8 @@ IOResult write_frame(int fd, const std::string& json) {
         (uint8_t)((len >>  8) & 0xFF),
         (uint8_t)( len        & 0xFF)
     };
-    if (send(fd, hdr, 4, MSG_NOSIGNAL) != 4)          return IOResult::DISCONNECTED;
-    if (send(fd, json.c_str(), len, MSG_NOSIGNAL) != (ssize_t)len)
-                                                        return IOResult::DISCONNECTED;
+    if (send_all(fd, hdr, 4) != IOResult::OK)               return IOResult::DISCONNECTED;
+    if (send_all(fd, json.c_str(), len) != IOResult::OK)    return IOResult::DISCONNECTED;
     return IOResult::OK;
 }
 
@@ -48,8 +65,8 @@ IOResult write_raw_frame(int fd, const uint8_t* data, size_t len) {
         (uint8_t)((n >>  8) & 0xFF),
         (uint8_t)( n        & 0xFF)
     };
-    if (send(fd, hdr, 4, MSG_NOSIGNAL) != 4)             return IOResult::DISCONNECTED;
-    if (send(fd, data, len, MSG_NOSIGNAL) != (ssize_t)len) return IOResult::DISCONNECTED;
+    if (send_all(fd, hdr, 4) != IOResult::OK)       return IOResult::DISCONNECTED;
+    if (send_all(fd, data, len) != IOResult::OK)    return IOResult::DISCONNECTED;
     return IOResult::OK;
 }
 
