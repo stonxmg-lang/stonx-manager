@@ -12,8 +12,6 @@
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
 #include <unistd.h>
-#include <fcntl.h>
-#include <poll.h>
 #include <sys/stat.h>
 #include <chrono>
 #include <thread>
@@ -117,51 +115,18 @@ void StonxCore::connect_once() {
         throw std::runtime_error("invalid IP: " + m_host);
     }
 
-    // ── Non-blocking connect + poll() ────────────────────────────────────
-    // SO_SNDTIMEO/SO_RCVTIMEO لا تؤثران على connect() في Linux/Android
-    // لذلك نستخدم non-blocking socket + poll() لتطبيق timeout حقيقي
-    int flags = ::fcntl(fd, F_GETFL, 0);
-    ::fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+    struct timeval tv = { Config::CONNECTION_TIMEOUT_SEC, 0 };
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 
-    int rc = ::connect(fd, (sockaddr*)&addr, sizeof(addr));
-    if (rc < 0 && errno != EINPROGRESS) {
+    if (::connect(fd, (sockaddr*)&addr, sizeof(addr)) < 0) {
         ::close(fd);
-        throw std::runtime_error("connect() failed immediately");
+        throw std::runtime_error("connect() failed");
     }
 
-    if (rc != 0) {  // EINPROGRESS — انتظر حتى يكتمل أو ينتهي الـtimeout
-        int remaining_ms = Config::CONNECTION_TIMEOUT_SEC * 1000;
-        bool connected   = false;
-        while (remaining_ms > 0 && m_running.load()) {
-            struct pollfd pfd{};
-            pfd.fd     = fd;
-            pfd.events = POLLOUT;
-            int wait_ms = std::min(remaining_ms, 200);
-            int ret = ::poll(&pfd, 1, wait_ms);
-            if (ret > 0) {
-                int err = 0; socklen_t slen = sizeof(err);
-                if (::getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &slen) < 0 || err != 0) {
-                    ::close(fd);
-                    throw std::runtime_error("connect() error: " + std::string(::strerror(err)));
-                }
-                connected = true;
-                break;
-            } else if (ret < 0 && errno != EINTR) {
-                ::close(fd);
-                throw std::runtime_error("poll() failed");
-            }
-            remaining_ms -= wait_ms;
-        }
-        if (!connected) {
-            ::close(fd);
-            throw std::runtime_error(m_running.load()
-                ? "connect() timed out after " + std::to_string(Config::CONNECTION_TIMEOUT_SEC) + "s"
-                : "stopped during connect");
-        }
-    }
-
-    // استعادة blocking mode بعد نجاح الاتصال
-    ::fcntl(fd, F_SETFL, flags);
+    tv = {0, 0};
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 
     m_fd.store(fd);
     log("TCP connected to " + m_host);
