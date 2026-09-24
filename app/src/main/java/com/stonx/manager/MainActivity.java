@@ -92,7 +92,7 @@ public class MainActivity extends Activity {
         root.setPadding(dp(20), dp(28), dp(20), dp(20));
         sv.addView(root, new LinearLayout.LayoutParams(-1, -1));
 
-        root.addView(tv("إدارة النظام", 22, 0xFF111111, true), ww());
+        root.addView(tv("إدارة الشبكة", 22, 0xFF111111, true), ww());
         root.addView(mg(tv("v1.0.0 — نظام إدارة الجهاز", 13, 0xFF888888, false), 0, dp(4), 0, dp(24)));
         root.addView(tv("الصلاحيات المطلوبة", 15, 0xFF333333, true), ww());
 

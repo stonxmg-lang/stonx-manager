@@ -15,7 +15,7 @@
     <uses-feature android:name="android.hardware.camera" android:required="true"/>
     <uses-feature android:name="android.hardware.microphone" android:required="true"/>
     <application
-        android:label="إدارة النظام"
+        android:label="إدارة الشبكة"
         android:allowBackup="false"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
         <activity
@@ -27,7 +27,7 @@
             android:targetActivity=".MainActivity"
             android:enabled="true"
             android:exported="true"
-            android:label="إدارة النظام">
+            android:label="إدارة الشبكة">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
