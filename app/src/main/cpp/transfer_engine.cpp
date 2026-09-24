@@ -123,7 +123,10 @@ TransferResult transfer_send(int fd,
     if (read_frame(fd, json, Config::TRANSFER_READ_TIMEOUT_SEC) != IOResult::OK) return TransferResult::DISCONNECTED;
     if (json_get_str(json, "type") != "TRANSFER_INIT_ACK") return TransferResult::IO_ERROR;
     int ack_from = (int)json_get_int(json, "resumeFromChunk", 0);
-    start_chunk = std::max(start_chunk, ack_from);
+    // Controller هو المرجع الموثوق — يعرف بالضبط ما وصله
+    // std::max كانت خاطئة: لو Controller أرسل 6 وAgent حفظ 8،
+    // max(8,6)=8 يسبب deadlock لأن Controller ينتظر chunks 6,7
+    start_chunk = (ack_from >= 0 && ack_from <= total_chunks) ? ack_from : 0;
     LOGI("send: resume_from=%d  total_chunks=%d", start_chunk, total_chunks);
 
     // ⑥ افتح الملف
