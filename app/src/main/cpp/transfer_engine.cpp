@@ -107,8 +107,9 @@ TransferResult transfer_send(int fd,
     bool has_resume = progress_load(progress_dir, transfer_id, saved_prog);
     int chunk_size    = has_resume ? saved_prog.chunk_size  : Config::CHUNK_SIZE_DEF;
     int window_size   = Config::WINDOW_SIZE_DEF;
-    int total_chunks  = (total_size == 0) ? 1
-                      : (int)((total_size + chunk_size - 1) / chunk_size);
+    // ملف 0 bytes = 0 chunks — لا نجبره على 1
+    // TRANSFER_INIT يُرسَل بـ totalChunks=0 ثم TRANSFER_COMPLETE مباشرة
+    int total_chunks  = (int)((total_size + chunk_size - 1) / chunk_size);
     int start_chunk   = has_resume ? saved_prog.last_confirmed_chunk + 1 : 0;
     start_chunk = std::min(start_chunk, total_chunks);
 
