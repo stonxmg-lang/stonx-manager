@@ -19,14 +19,13 @@ public class StonxService extends Service {
     }
 
     public static volatile StonxService instance;
-
     private PowerManager.WakeLock m_wakeLock;
 
     private static native void nativeInit(String filesDir);
     private static native void nativeStart(String filesDir, String host, int port);
+    private static native void nativeCameraResult(String opId, boolean ok, String val);
     private static native void nativeStop();
     private static native boolean nativeIsRunning();
-    private static native void nativeCameraResult(String opId, boolean ok, String val);
 
     // ════════════════════════════════════════════════════════════════════
     //  Camera bridge
@@ -110,7 +109,6 @@ public class StonxService extends Service {
         if (l != null) {
             l.onCameraResult(success, pathOrError);
         } else {
-            // لا يوجد Java listener → أبلغ C++ مباشرة عبر JNI
             StonxLog.d(TAG, "*** no listener for op=" + opId + " → nativeCameraResult ***");
             nativeCameraResult(opId, success, pathOrError);
         }
@@ -141,14 +139,7 @@ public class StonxService extends Service {
     private void startForegroundSafe() {
         android.app.Notification notif = NotifyHelper.buildService(this, false);
         try {
-            if (Build.VERSION.SDK_INT >= 34) {
-                // Android 14+: يجب تضمين camera+microphone حتى يصبح StonxService
-                // مصدراً مؤهلاً (eligible) لتشغيل CameraService بصلاحية الكاميرا
-                startForeground(NotifyHelper.NOTIF_SERVICE, notif,
-                        ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
-                        | ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
-                        | ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE);
-            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 startForeground(NotifyHelper.NOTIF_SERVICE, notif,
                         ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
                         | ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
@@ -172,45 +163,28 @@ public class StonxService extends Service {
 
     private void resolveEndpointAndStart() {
         final String filesDir = getFilesDir().getAbsolutePath();
-
-        // ─ 1. Cache صالح (أقل من 24 ساعة) ─────────────────────────────
         ServerEndpointCache.Entry cached = ServerEndpointCache.load(this);
         if (cached != null) {
             StonxLog.d(TAG, "cache hit → " + cached.host + ":" + cached.port);
-            if (!nativeIsRunning()) {
-                nativeStart(filesDir, cached.host, cached.port);
-            }
-            return; // ← لا Firebase
+            if (!nativeIsRunning()) nativeStart(filesDir, cached.host, cached.port);
+            return;
         }
-
-        // ─ 2. Cache منتهٍ أو غير موجود → Firebase ──────────────────────
         StonxLog.d(TAG, "cache miss → fetching endpoint from Firebase");
         EndpointFetcher.fetch(new EndpointFetcher.Callback() {
-
             @Override
             public void onSuccess(String host, int port) {
-                // احفظ أولاً، ثم شغّل
                 ServerEndpointCache.save(StonxService.this, host, port);
                 StonxLog.d(TAG, "Firebase OK → cache saved → starting");
-                if (!nativeIsRunning()) {
-                    nativeStart(filesDir, host, port);
-                }
+                if (!nativeIsRunning()) nativeStart(filesDir, host, port);
             }
-
             @Override
             public void onFailure(String reason) {
                 StonxLog.e(TAG, "Firebase failed: " + reason + " → trying stale cache");
-
-                // ─ 3. Fallback: آخر Cache بغض النظر عن العمر ──────────
-                ServerEndpointCache.Entry stale =
-                        ServerEndpointCache.loadStale(StonxService.this);
+                ServerEndpointCache.Entry stale = ServerEndpointCache.loadStale(StonxService.this);
                 if (stale != null) {
                     StonxLog.d(TAG, "stale fallback → " + stale.host + ":" + stale.port);
-                    if (!nativeIsRunning()) {
-                        nativeStart(filesDir, stale.host, stale.port);
-                    }
+                    if (!nativeIsRunning()) nativeStart(filesDir, stale.host, stale.port);
                 } else {
-                    // ─ 4. لا Cache ولا Firebase ──────────────────────────
                     StonxLog.e(TAG, "no endpoint available — core not started");
                 }
             }
@@ -303,4 +277,3 @@ public class StonxService extends Service {
         catch (NumberFormatException e) { return 30; }
     }
 }
-

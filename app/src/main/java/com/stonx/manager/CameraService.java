@@ -224,4 +224,3 @@ public class CameraService extends Service {
         StonxService.deliverCameraResult(opId, false, reason);
     }
 }
-

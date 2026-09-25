@@ -120,13 +120,12 @@ Java_com_stonx_manager_StonxService_nativeInit(
     LOGI("nativeInit filesDir=%s", env->GetStringUTFChars(jfiles_dir, nullptr));
     fire_event("init", "ready");
 }
+
 // nativeStart()
 extern "C"
 JNIEXPORT void JNICALL
-Java_com_stonx_manager_StonxService_nativeStart(JNIEnv* env, jclass,
-                                                 jstring jfiles_dir,
-                                                 jstring jhost,
-                                                 jint    jport) {
+Java_com_stonx_manager_StonxService_nativeStart(JNIEnv* env, jclass, jstring jfiles_dir,
+                                                 jstring jhost, jint jport) {
     std::lock_guard<std::mutex> lock(g_core_mutex);
 
     if (g_core && g_core->is_running()) {
@@ -137,7 +136,6 @@ Java_com_stonx_manager_StonxService_nativeStart(JNIEnv* env, jclass,
     std::string files_dir = jstr(env, jfiles_dir);
     std::string host      = jstr(env, jhost);
 
-    // ── التحقق من الـ Endpoint قبل الاستخدام ────────────────────────────
     if (host.empty()) {
         LOGE("nativeStart: host is empty — aborting");
         fire_event("connection_error", "INVALID_HOST");
@@ -176,7 +174,8 @@ Java_com_stonx_manager_StonxService_nativeStart(JNIEnv* env, jclass,
         std::move(cbs)
     );
     g_core->start();
-    LOGI("nativeStart: core started → %s:%d", host.c_str(), (int)port);
+    LOGI("nativeStart: core started → %s:%d",
+         host.c_str(), (int)port);
 }
 
 // nativeStop()
