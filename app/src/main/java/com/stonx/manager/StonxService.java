@@ -26,6 +26,7 @@ public class StonxService extends Service {
     private static native void nativeStart(String filesDir, String host, int port);
     private static native void nativeStop();
     private static native boolean nativeIsRunning();
+    private static native void nativeCameraResult(String opId, boolean ok, String val);
 
     // ════════════════════════════════════════════════════════════════════
     //  Camera bridge
