@@ -28,6 +28,7 @@ public class CameraService extends LifecycleService {
 
     private static final String TAG = "STONX_CAM";
 
+    public static final String EXTRA_ACTION_TYPE = "action_type";  // "photo" أو "video"
     public static final String EXTRA_FACING = "facing";
     public static final String EXTRA_OUTPUT  = "output";
     public static final String EXTRA_OP_ID   = "op_id";
