@@ -29,7 +29,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 /**
  * CameraService — التقاط صورة واحدة.
  * يُستدعى من StonxService عبر startForegroundService.
- *
+ * مش فاهم اي اللي بيحصل ده 
  * نستخدم foregroundServiceType=dataSync لتجنب قيود Android 14+
  * (type=camera يحتاج eligible state خاص لا يمكن تأمينه بدون activity).
  */
