@@ -109,7 +109,9 @@ public class StonxService extends Service {
         if (l != null) {
             l.onCameraResult(success, pathOrError);
         } else {
-            StonxLog.d(TAG, "*** no listener for op=" + opId + " ***");
+            // لا يوجد Java listener → أبلغ C++ مباشرة عبر JNI
+            StonxLog.d(TAG, "*** no listener for op=" + opId + " → nativeCameraResult ***");
+            nativeCameraResult(opId, success, pathOrError);
         }
     }
 

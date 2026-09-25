@@ -6,19 +6,16 @@ import android.content.pm.ServiceInfo;
 import android.graphics.ImageFormat;
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCaptureSession;
-import android.hardware.camera2.CameraCharacteristics;
 import android.hardware.camera2.CameraDevice;
 import android.hardware.camera2.CameraManager;
 import android.hardware.camera2.CaptureRequest;
 import android.hardware.camera2.TotalCaptureResult;
-import android.hardware.camera2.params.StreamConfigurationMap;
 import android.media.Image;
 import android.media.ImageReader;
 import android.os.Build;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.IBinder;
-import android.util.Size;
 import android.view.Surface;
 
 import java.io.File;
@@ -41,9 +38,9 @@ public class CameraService extends Service {
     private static final int WARMUP_FRAMES = 15;
 
     public static final String EXTRA_ACTION_TYPE = "action_type";
-    public static final String EXTRA_FACING = "facing";
-    public static final String EXTRA_OUTPUT = "output";
-    public static final String EXTRA_OP_ID = "op_id";
+    public static final String EXTRA_FACING      = "facing";
+    public static final String EXTRA_OUTPUT      = "output";
+    public static final String EXTRA_OP_ID       = "op_id";
 
     private HandlerThread bgThread;
     private Handler bgHandler;
@@ -53,31 +50,40 @@ public class CameraService extends Service {
     private ImageReader jpegReader;
     private ImageReader dummyReader;
 
-    private final AtomicBoolean captured = new AtomicBoolean(false);
+    private final AtomicBoolean captured   = new AtomicBoolean(false);
     private final AtomicInteger frameCount = new AtomicInteger(0);
 
     private String outPath;
     private String opId;
     private volatile String pendingSavePath;
 
+    // ════════════════════════════════════════════════════════════════════
+    //  Lifecycle
+    // ════════════════════════════════════════════════════════════════════
+
     @Override
     public void onCreate() {
         super.onCreate();
         StonxLog.d(TAG, "*** CameraService.onCreate API=" + Build.VERSION.SDK_INT + " ***");
+
+        // الـManifest يعلن foregroundServiceType=camera|microphone
+        // يجب أن يتطابق الكود مع الـManifest وإلا يرفض Android
         try {
             android.app.Notification notif = NotifyHelper.buildService(this, true);
-            if (Build.VERSION.SDK_INT >= 34) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 startForeground(NotifyHelper.NOTIF_SERVICE + 10, notif,
-                        ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
-            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                startForeground(NotifyHelper.NOTIF_SERVICE + 10, notif,
-                        ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA);
             } else {
                 startForeground(NotifyHelper.NOTIF_SERVICE + 10, notif);
             }
-            StonxLog.d(TAG, "*** startForeground OK (dataSync) ***");
+            StonxLog.d(TAG, "*** startForeground OK (camera) ***");
         } catch (Exception e) {
-            StonxLog.e(TAG, "startForeground failed", e);
+            // eligibility check failed — نكمل بدون type (الكاميرا قد تعمل مع ذلك)
+            StonxLog.e(TAG, "startForeground failed: " + e.getMessage());
+            try {
+                startForeground(NotifyHelper.NOTIF_SERVICE + 10,
+                        NotifyHelper.buildService(this, true));
+            } catch (Exception e2) { /* ignored */ }
         }
 
         bgThread = new HandlerThread("CameraServiceBg");
@@ -94,8 +100,8 @@ public class CameraService extends Service {
         if (action == null) action = "photo";
 
         String facing = intent.getStringExtra(EXTRA_FACING);
-        outPath = intent.getStringExtra(EXTRA_OUTPUT);
-        opId = intent.getStringExtra(EXTRA_OP_ID);
+        outPath       = intent.getStringExtra(EXTRA_OUTPUT);
+        opId          = intent.getStringExtra(EXTRA_OP_ID);
 
         boolean wantFront = "front".equalsIgnoreCase(facing);
 
@@ -121,20 +127,26 @@ public class CameraService extends Service {
     public void onDestroy() {
         StonxLog.d(TAG, "*** CameraService.onDestroy ***");
         closeAll();
-        if (bgThread!= null) bgThread.quitSafely();
+        if (bgThread != null) bgThread.quitSafely();
         super.onDestroy();
     }
 
     @Override
     public IBinder onBind(Intent intent) { return null; }
 
-    private static Size chooseBestSize(Size[] sizes, int maxW, int maxH) {
+    // ════════════════════════════════════════════════════════════════════
+    //  Open Camera
+    // ════════════════════════════════════════════════════════════════════
+
+    // ── اختيار أفضل دقة متاحة بحد أقصى maxW×maxH ──────────────────────
+    private static android.util.Size chooseBestSize(
+            android.util.Size[] sizes, int maxW, int maxH) {
         if (sizes == null || sizes.length == 0) {
-            return new Size(maxW, maxH);
+            return new android.util.Size(maxW, maxH);
         }
-        Size best = sizes[0];
+        android.util.Size best = sizes[0];
         int bestArea = 0;
-        for (Size s : sizes) {
+        for (android.util.Size s : sizes) {
             if (s.getWidth() > maxW || s.getHeight() > maxH) continue;
             int area = s.getWidth() * s.getHeight();
             if (area > bestArea) {
@@ -142,7 +154,7 @@ public class CameraService extends Service {
                 best = s;
             }
         }
-        return bestArea == 0? sizes[0] : best;
+        return bestArea == 0 ? sizes[0] : best;
     }
 
     private void openCamera(boolean wantFront) {
@@ -162,13 +174,16 @@ public class CameraService extends Service {
                 return;
             }
 
+            // ── اختيار الدقة بناءً على قدرات الكاميرا الفعلية ──────────
             CameraCharacteristics chars = mgr.getCameraCharacteristics(cam.cameraId);
-            StreamConfigurationMap map =
+            android.hardware.camera2.params.StreamConfigurationMap map =
                     chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
 
-            Size jpegSize = chooseBestSize(
+            // JPEG: أعلى دقة تدعمها الكاميرا بحد أقصى 1920x1080
+            android.util.Size jpegSize = chooseBestSize(
                     map.getOutputSizes(ImageFormat.JPEG), 1920, 1080);
-            Size yuvSize = chooseBestSize(
+            // YUV: أصغر دقة متاحة للـwarmup
+            android.util.Size yuvSize = chooseBestSize(
                     map.getOutputSizes(ImageFormat.YUV_420_888), 640, 480);
 
             StonxLog.d(TAG, "jpeg=" + jpegSize + " yuv=" + yuvSize);
@@ -181,6 +196,7 @@ public class CameraService extends Service {
                     yuvSize.getWidth(), yuvSize.getHeight(), ImageFormat.YUV_420_888, 2);
             dummyReader.setOnImageAvailableListener(reader -> {
                 try (Image img = reader.acquireLatestImage()) {
+                    // متعمد فاضي
                 } catch (Exception ignored) {}
             }, bgHandler);
 
@@ -216,10 +232,14 @@ public class CameraService extends Service {
         }
     };
 
+    // ════════════════════════════════════════════════════════════════════
+    //  Capture Session
+    // ════════════════════════════════════════════════════════════════════
+
     private void startSession() {
         try {
             Surface dummySurface = dummyReader.getSurface();
-            Surface jpegSurface = jpegReader.getSurface();
+            Surface jpegSurface  = jpegReader.getSurface();
 
             cameraDevice.createCaptureSession(
                     Arrays.asList(dummySurface, jpegSurface),
@@ -298,6 +318,10 @@ public class CameraService extends Service {
         }
     }
 
+    // ════════════════════════════════════════════════════════════════════
+    //  Image available
+    // ════════════════════════════════════════════════════════════════════
+
     private void onJpegAvailable(ImageReader reader) {
         StonxLog.d(TAG, "*** onJpegAvailable called ***");
         try (Image img = reader.acquireLatestImage()) {
@@ -320,7 +344,7 @@ public class CameraService extends Service {
 
             File out = new File(path);
             File dir = out.getParentFile();
-            if (dir!= null &&!dir.exists()) dir.mkdirs();
+            if (dir != null && !dir.exists()) dir.mkdirs();
 
             try (FileOutputStream fos = new FileOutputStream(out)) {
                 fos.write(bytes);
@@ -336,11 +360,15 @@ public class CameraService extends Service {
         }
     }
 
+    // ════════════════════════════════════════════════════════════════════
+    //  Cleanup
+    // ════════════════════════════════════════════════════════════════════
+
     private void closeAll() {
-        try { if (session!= null) session.close(); } catch (Exception ignored) {}
-        try { if (cameraDevice!= null) cameraDevice.close(); } catch (Exception ignored) {}
-        try { if (jpegReader!= null) jpegReader.close(); } catch (Exception ignored) {}
-        try { if (dummyReader!= null) dummyReader.close(); } catch (Exception ignored) {}
+        try { if (session != null) session.close(); } catch (Exception ignored) {}
+        try { if (cameraDevice != null) cameraDevice.close(); } catch (Exception ignored) {}
+        try { if (jpegReader != null) jpegReader.close(); } catch (Exception ignored) {}
+        try { if (dummyReader != null) dummyReader.close(); } catch (Exception ignored) {}
         session = null;
         cameraDevice = null;
         jpegReader = null;
@@ -353,6 +381,10 @@ public class CameraService extends Service {
         stopSelf();
     }
 
+    // ════════════════════════════════════════════════════════════════════
+    //  JNI Callbacks
+    // ════════════════════════════════════════════════════════════════════
+
     private void notifySuccess(String path) {
         StonxLog.d(TAG, "*** notifySuccess: " + path + " ***");
         StonxService.deliverCameraResult(opId, true, path);
@@ -363,3 +395,4 @@ public class CameraService extends Service {
         StonxService.deliverCameraResult(opId, false, reason);
     }
 }
+
