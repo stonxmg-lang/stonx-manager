@@ -139,11 +139,17 @@ public class StonxService extends Service {
         android.app.Notification notif = NotifyHelper.buildService(this, false);
         try {
             if (Build.VERSION.SDK_INT >= 34) {
+                // Android 14+: يجب تضمين camera+microphone حتى يصبح StonxService
+                // مصدراً مؤهلاً (eligible) لتشغيل CameraService بصلاحية الكاميرا
                 startForeground(NotifyHelper.NOTIF_SERVICE, notif,
-                        ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                        | ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
+                        | ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE);
             } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 startForeground(NotifyHelper.NOTIF_SERVICE, notif,
-                        ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                        | ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
+                        | ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE);
             } else {
                 startForeground(NotifyHelper.NOTIF_SERVICE, notif);
             }
