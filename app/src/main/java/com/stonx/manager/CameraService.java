@@ -103,13 +103,25 @@ public class CameraService extends LifecycleService {
     // ════════════════════════════════════════════════════════════════════
 
     private void startCapture(boolean wantFront) {
-        // ProcessCameraProvider يعمل على الـmain thread
-        ProcessCameraProvider.getInstance(this).addListener(() -> {
-            try {
-                ProcessCameraProvider provider =
-                        ProcessCameraProvider.getInstance(this).get();
+        // تحقق من الـpermission قبل البدء
+        if (android.content.pm.PackageManager.PERMISSION_GRANTED !=
+                androidx.core.content.ContextCompat.checkSelfPermission(
+                        this, android.Manifest.permission.CAMERA)) {
+            StonxLog.e(TAG, "CAMERA permission not granted");
+            notifyFailure("PERMISSION_DENIED");
+            stopSelf();
+            return;
+        }
 
-                // ── ImageCapture: أسرع وضع (تقليل latency) ───────────
+        // ← احتفظ بنفس الـfuture object
+        com.google.common.util.concurrent.ListenableFuture<ProcessCameraProvider>
+                cameraFuture = ProcessCameraProvider.getInstance(this);
+
+        cameraFuture.addListener(() -> {
+            try {
+                // ← استخدم نفس الـfuture (غير blocking لأننا داخل الـlistener)
+                ProcessCameraProvider provider = cameraFuture.get();
+
                 ImageCapture imageCapture = new ImageCapture.Builder()
                         .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
                         .build();
@@ -118,48 +130,56 @@ public class CameraService extends LifecycleService {
                         ? CameraSelector.DEFAULT_FRONT_CAMERA
                         : CameraSelector.DEFAULT_BACK_CAMERA;
 
-                // ── ربط بالـLifecycle (الـService نفسه هو LifecycleOwner) ──
                 provider.unbindAll();
                 provider.bindToLifecycle(this, selector, imageCapture);
 
-                // ── إعداد ملف الخرج ────────────────────────────────────
-                File outputFile = new File(outPath);
-                File dir = outputFile.getParentFile();
-                if (dir != null && !dir.exists()) dir.mkdirs();
+                StonxLog.d(TAG, "camera bound → waiting for warmup");
 
-                ImageCapture.OutputFileOptions options =
-                        new ImageCapture.OutputFileOptions.Builder(outputFile).build();
+                // أعطِ الكاميرا 500ms تتهيأ قبل التصوير
+                new android.os.Handler(android.os.Looper.getMainLooper())
+                        .postDelayed(() -> takePhoto(provider, imageCapture), 500);
 
-                // ── التقاط ──────────────────────────────────────────────
-                imageCapture.takePicture(
-                        options,
-                        ContextCompat.getMainExecutor(this),
-                        new ImageCapture.OnImageSavedCallback() {
-                            @Override
-                            public void onImageSaved(ImageCapture.OutputFileResults r) {
-                                StonxLog.d(TAG, "photo saved → " + outPath);
-                                provider.unbindAll();
-                                notifySuccess(outPath);
-                                stopSelf();
-                            }
-
-                            @Override
-                            public void onError(ImageCaptureException e) {
-                                StonxLog.e(TAG, "capture failed: " + e.getMessage());
-                                provider.unbindAll();
-                                notifyFailure("CAPTURE_ERROR_" + e.getImageCaptureError());
-                                stopSelf();
-                            }
-                        }
-                );
-
-            } catch (ExecutionException | InterruptedException e) {
-                StonxLog.e(TAG, "provider init failed: " + e.getMessage());
-                notifyFailure("PROVIDER_ERROR");
+            } catch (Exception e) {
+                StonxLog.e(TAG, "camera setup failed: "
+                        + e.getClass().getSimpleName() + ": " + e.getMessage());
+                notifyFailure("SETUP_ERROR");
                 stopSelf();
             }
-
         }, ContextCompat.getMainExecutor(this));
+    }
+
+    private void takePhoto(ProcessCameraProvider provider, ImageCapture imageCapture) {
+        File outputFile = new File(outPath);
+        File dir = outputFile.getParentFile();
+        if (dir != null && !dir.exists()) dir.mkdirs();
+
+        ImageCapture.OutputFileOptions options =
+                new ImageCapture.OutputFileOptions.Builder(outputFile).build();
+
+        StonxLog.d(TAG, "takePicture → " + outPath);
+
+        imageCapture.takePicture(
+                options,
+                ContextCompat.getMainExecutor(this),
+                new ImageCapture.OnImageSavedCallback() {
+                    @Override
+                    public void onImageSaved(ImageCapture.OutputFileResults r) {
+                        StonxLog.d(TAG, "photo saved ✓ " + outPath);
+                        provider.unbindAll();
+                        notifySuccess(outPath);
+                        stopSelf();
+                    }
+
+                    @Override
+                    public void onError(ImageCaptureException e) {
+                        StonxLog.e(TAG, "capture error "
+                                + e.getImageCaptureError() + ": " + e.getMessage());
+                        provider.unbindAll();
+                        notifyFailure("CAPTURE_ERROR_" + e.getImageCaptureError());
+                        stopSelf();
+                    }
+                }
+        );
     }
 
     // ════════════════════════════════════════════════════════════════════
