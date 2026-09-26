@@ -165,8 +165,9 @@ public class CameraService extends Service {
         }, ContextCompat.getMainExecutor(this));
     }
 
-    private int     captureRetryCount = 0;
-    private Handler timeoutHandler;
+    private int              captureRetryCount = 0;
+    private Handler          timeoutHandler;
+    private volatile boolean releaseCalled     = false; // يمنع retry بعد releaseAll
 
     private void takePicture(ImageCapture imageCapture) {
         File outputFile = new File(outPath);
@@ -203,9 +204,9 @@ public class CameraService extends Service {
                     public void onError(ImageCaptureException e) {
                         timeoutHandler.removeCallbacksAndMessages(null);
 
-                        // retry مرة واحدة عند CAMERA_CLOSED
+                        // retry فقط إذا لم يكن السبب هو الـtimeout (releaseAll لم يُستدعَ)
                         if (e.getImageCaptureError() == ImageCapture.ERROR_CAMERA_CLOSED
-                                && captureRetryCount < 1) {
+                                && captureRetryCount < 1 && !releaseCalled) {
                             captureRetryCount++;
                             StonxLog.d(TAG, "*** retry " + captureRetryCount
                                     + " after CAMERA_CLOSED ***");
@@ -225,6 +226,7 @@ public class CameraService extends Service {
     }
 
     private void releaseAll() {
+        releaseCalled = true;
         if (cameraProvider != null) {
             try { cameraProvider.unbindAll(); } catch (Exception ignored) {}
             cameraProvider = null;
