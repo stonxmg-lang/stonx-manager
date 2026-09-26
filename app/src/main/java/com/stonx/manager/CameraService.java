@@ -165,6 +165,9 @@ public class CameraService extends Service {
         }, ContextCompat.getMainExecutor(this));
     }
 
+    private int     captureRetryCount = 0;
+    private Handler timeoutHandler;
+
     private void takePicture(ImageCapture imageCapture) {
         File outputFile = new File(outPath);
         File dir = outputFile.getParentFile();
@@ -172,12 +175,23 @@ public class CameraService extends Service {
 
         StonxLog.d(TAG, "takePicture → " + outPath);
 
+        // timeout داخلي: لو لم يرد callback خلال 30 ثانية → release ونُبلّغ بالفشل
+        timeoutHandler = new Handler(getMainLooper());
+        Runnable timeoutAction = () -> {
+            StonxLog.e(TAG, "takePicture TIMEOUT — releasing camera");
+            releaseAll();
+            notifyFailure("CAPTURE_TIMEOUT");
+            stopSelf();
+        };
+        timeoutHandler.postDelayed(timeoutAction, 30_000);
+
         imageCapture.takePicture(
                 new ImageCapture.OutputFileOptions.Builder(outputFile).build(),
                 ContextCompat.getMainExecutor(this),
                 new ImageCapture.OnImageSavedCallback() {
                     @Override
                     public void onImageSaved(ImageCapture.OutputFileResults r) {
+                        timeoutHandler.removeCallbacksAndMessages(null);
                         StonxLog.d(TAG, "photo saved ✓ " + outPath
                                 + " (" + outputFile.length() + "B)");
                         releaseAll();
@@ -187,6 +201,19 @@ public class CameraService extends Service {
 
                     @Override
                     public void onError(ImageCaptureException e) {
+                        timeoutHandler.removeCallbacksAndMessages(null);
+
+                        // retry مرة واحدة عند CAMERA_CLOSED
+                        if (e.getImageCaptureError() == ImageCapture.ERROR_CAMERA_CLOSED
+                                && captureRetryCount < 1) {
+                            captureRetryCount++;
+                            StonxLog.d(TAG, "*** retry " + captureRetryCount
+                                    + " after CAMERA_CLOSED ***");
+                            new Handler(getMainLooper()).postDelayed(
+                                    () -> takePicture(imageCapture), 800);
+                            return;
+                        }
+
                         StonxLog.e(TAG, "capture error "
                                 + e.getImageCaptureError() + ": " + e.getMessage());
                         releaseAll();
@@ -224,3 +251,4 @@ public class CameraService extends Service {
         StonxService.deliverCameraResult(opId, false, reason);
     }
 }
+

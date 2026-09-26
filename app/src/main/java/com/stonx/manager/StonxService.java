@@ -8,7 +8,11 @@ import android.os.IBinder;
 import android.os.PowerManager;
 
 import java.io.File;
+import java.util.Collections;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 public class StonxService extends Service {
 
@@ -79,24 +83,30 @@ public class StonxService extends Service {
             return;
         }
 
-        // ✅ نراقب ظهور الملف في thread منفصل
-        final String expectedFile = outPath;
-        final String finalOpId = opId;
-        new Thread(() -> {
-            long deadline = System.currentTimeMillis() + 60_000;
-            while (System.currentTimeMillis() < deadline) {
-                File f = new File(expectedFile);
-                if (f.exists() && f.length() > 0) {
-                    StonxLog.d(TAG, "*** file appeared: " + expectedFile
-                            + " (" + f.length() + "B) ***");
-                    deliverCameraResult(finalOpId, true, expectedFile);
-                    return;
-                }
-                try { Thread.sleep(200); } catch (InterruptedException ignored) {}
+        // CountDownLatch يُبلوك هذا الـthread (JNI) حتى تصل نتيجة الكاميرا
+        // يمنع handle_commands من قراءة أمر جديد قبل انتهاء الكاميرا الحالية
+        final CountDownLatch latch    = new CountDownLatch(1);
+        final String         finalOpId = opId;
+
+        sCameraListeners.put(opId, (success, value) -> {
+            // يُستدعى من deliverCameraResult → يُبلّغ C++ → يُفرج عن الـlatch
+            nativeCameraResult(finalOpId, success, value);
+            latch.countDown();
+        });
+
+        try {
+            // 70 ثانية — أطول من timeout الكاميرا الداخلي (60s)
+            boolean done = latch.await(70, TimeUnit.SECONDS);
+            if (!done) {
+                StonxLog.e(TAG, "*** latch timeout for op=" + finalOpId + " ***");
+                sCameraListeners.remove(finalOpId);
+                nativeCameraResult(finalOpId, false, "JNI_TIMEOUT");
             }
-            StonxLog.e(TAG, "*** timeout waiting for file: " + expectedFile + " ***");
-            deliverCameraResult(finalOpId, false, "TIMEOUT_NO_FILE");
-        }, "CameraWatcher-" + opId).start();
+        } catch (InterruptedException e) {
+            StonxLog.e(TAG, "*** latch interrupted op=" + finalOpId + " ***");
+            sCameraListeners.remove(finalOpId);
+            nativeCameraResult(finalOpId, false, "JNI_INTERRUPTED");
+        }
     }
 
     /**
@@ -107,8 +117,10 @@ public class StonxService extends Service {
                 + " val=" + pathOrError + " ***");
         CameraResultListener l = (opId != null) ? sCameraListeners.remove(opId) : null;
         if (l != null) {
+            // الـlistener يستدعي nativeCameraResult ويُفرج عن الـCountDownLatch
             l.onCameraResult(success, pathOrError);
         } else {
+            // لا listener — نبلّغ C++ مباشرة (fallback)
             StonxLog.d(TAG, "*** no listener for op=" + opId + " → nativeCameraResult ***");
             nativeCameraResult(opId, success, pathOrError);
         }
@@ -277,3 +289,4 @@ public class StonxService extends Service {
         catch (NumberFormatException e) { return 30; }
     }
 }
+
